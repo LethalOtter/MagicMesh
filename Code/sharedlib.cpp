@@ -11,7 +11,7 @@ extern "C"
         return sin(x);
     }
 
-    double compute_cos(double x) // New function
+    double compute_cos(double x)
     {
         return cos(x);
     }
