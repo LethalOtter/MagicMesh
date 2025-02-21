@@ -1,131 +1,197 @@
-import itertools
 import numpy as np
 import matplotlib.pyplot as plt
+from itertools import product
 
 
-class StructuredGrid:
-    def __init__(self, numINodes, numJNodes, xBounds, yBounds, tol=1e-6, max_iter=5000):
-        self.numINodes = numINodes
-        self.numJNodes = numJNodes
+class StructuredMesh:
+    def __init__(self, iMax, jMax, xBounds, yBounds, tol=1e-6, iter_lim=100):
 
-        self.xLeft, self.xRight = xBounds
-        self.yLower, self.yUpper = yBounds
+        self.iMax = iMax
+        self.jMax = jMax
+        self.xMin, self.xMax = xBounds
+        self.yMin, self.yMax = yBounds
+
         self.tol = tol
-        self.max_iter = max_iter
+        self.iter_lim = iter_lim
 
-        # Computational Grid initialization
-        self.xiGrid = np.zeros((numJNodes, numINodes), dtype=np.float64)
-        self.etaGrid = np.zeros((numJNodes, numINodes), dtype=np.float64)
+        # Create computational grid
+        xi = np.linspace(0, 1, self.iMax)
+        eta = np.linspace(0, 1, self.jMax)
 
-        # Algebraic Grid initialization
-        self.xGrid = np.zeros((numJNodes, numINodes))
-        self.yGrid = np.zeros((numJNodes, numINodes))
+        self.xiGrid, self.etaGrid = np.meshgrid(xi, eta)
 
-        # Coefficient Vector initialization
-        self.Coeffs = np.array((0, 0))
+        self.deltaXi = 1 / (self.iMax - 1)
+        self.deltaEta = 1 / (self.jMax - 1)
 
-        self.delta_eta = 1 / (numJNodes - 1)
-        self.delta_xi = 1 / (numINodes - 1)
+    def y_upper(self, x):
+        return self.yMax - 0.17 * np.sin((x - 2) * np.pi)
 
-    def y_upper_boundary(self, x):
-        return (
-            self.yUpper - 0.17 * np.sin((x - 2) * np.pi) if 2 < x < 3 else self.yUpper
-        )
+    def y_lower(self, x):
+        return 0.17 * np.sin((x - 2) * np.pi)
 
-    def y_lower_boundary(self, x):
-        return 0.17 * np.sin((x - 2) * np.pi) if 2 < x < 3 else self.yLower
+    def dy_dx_upper(self, x):
+        return -0.17 * np.pi * np.cos((x - 2) * np.pi)
 
-    def make_computational_grid(self):
-        for j, i in itertools.product(range(self.numJNodes), range(self.numINodes)):
-            self.etaGrid[j, i] = j / (self.numJNodes - 1)
-            self.xiGrid[j, i] = i / (self.numINodes - 1)
+    def dy_dx_lower(self, x):
+        return 0.17 * np.pi * np.cos((x - 2) * np.pi)
 
-    def make_algebraic_grid(self):
-        for j, i in itertools.product(range(self.numJNodes), range(self.numINodes)):
-            x = self.xLeft + self.xiGrid[j, i] * (self.xRight - self.xLeft)
-            y_l_bound, y_u_bound = self.y_lower_boundary(x), self.y_upper_boundary(x)
-            self.yGrid[j, i] = y_l_bound + self.etaGrid[j, i] * (y_u_bound - y_l_bound)
-            self.xGrid[j, i] = x
+    def create_algebraic_grid(self):
+        self.xGrid = self.xMin + self.xiGrid * (self.xMax - self.xMin)
+        self.yGrid = self.yMin + self.etaGrid * (self.yMax - self.yMin)
 
-    def calculate_coefficients(self, j, i):
-        dx_deta = (self.xGrid[j + 1, i] - self.xGrid[j - 1, i]) / (2 * self.delta_eta)
-        dx_dxi = (self.xGrid[j, i + 1] - self.xGrid[j, i - 1]) / (2 * self.delta_xi)
-        dy_deta = (self.yGrid[j + 1, i] - self.yGrid[j - 1, i]) / (2 * self.delta_eta)
-        dy_dxi = (self.yGrid[j, i + 1] - self.yGrid[j, i - 1]) / (2 * self.delta_xi)
+        # Instantiate boundary conditions
+        # Curve boundary condition
 
-        alpha = dx_deta**2 + dy_deta**2
-        beta = (dx_dxi * dx_deta) + (dy_dxi * dy_deta)
-        gamma = dx_dxi**2 + dy_dxi**2
+        for i in range(self.iMax):
+            x = self.xGrid[0, i]
+            if 2 < x < 3:
+                self.yGrid[0, i] = self.y_lower(x)
+                self.yGrid[-1, i] = self.y_upper(x)
+        self.xGrid[:, 0] = self.xMin
+        self.xGrid[:, -1] = self.xMax
 
-        epsilon = 1e-4
-        denom = max(
-            2 * alpha * self.delta_eta**2 + 2 * gamma * self.delta_xi**2, epsilon
-        )
+        # Normal boundary condition
 
-        A = (alpha * self.delta_xi**2) / denom
-        B = (beta * self.delta_xi * self.delta_eta) / (denom * 4)
-        C = (gamma * self.delta_xi**2) / denom
+        for i in range(self.iMax):
+            x = self.xGrid[0, i]
 
-        return -B, C, B, A, A, B, C, -B
+            # lower boundary
+            if 2 < x < 3:
+                dy_dx = self.dy_dx_lower(x)
+                # normal direction magnitude != 1
+                normal_line = np.array([-dy_dx, 1])
+                # normal direction magnitude = 1
+                normal = normal_line / np.linalg.norm(normal_line)
 
-    def GaussSeidel(self):
-        error = True
-        iteration = 0
-        while error:
-            errors = []
-
-            newYGrid = self.yGrid.copy()
-
-            # Filtering out rows and columns containing boundary conditions
-            for j, i in itertools.product(
-                range(1, self.numJNodes - 1), range(1, self.numINodes - 1)
-            ):
-                Coeffs = self.calculate_coefficients(j, i)
-
-                newY = (
-                    Coeffs[0] * newYGrid[j - 1, i - 1]
-                    + Coeffs[1] * newYGrid[j - 1, i]
-                    + Coeffs[2] * newYGrid[j - 1, i + 1]
-                    + Coeffs[3] * newYGrid[j, i - 1]
-                    + Coeffs[4] * self.yGrid[j, i + 1]
-                    + Coeffs[5] * self.yGrid[j + 1, i - 1]
-                    + Coeffs[6] * self.yGrid[j + 1, i]
-                    + Coeffs[7] * self.yGrid[j + 1, i + 1]
+                vector = np.array(
+                    [
+                        self.xGrid[1, i] - self.xGrid[0, i],
+                        self.yGrid[1, i] - self.yGrid[0, i],
+                    ]
                 )
 
-                errors.append(np.abs(self.yGrid[j, i] - newY))
+                vector_norm = np.linalg.norm(vector)
 
-                newYGrid[j, i] = newY
+                vector_rot = vector_norm * normal
 
-            self.yGrid = newYGrid.copy()
-            maxError = np.max(errors)
-            if maxError < self.tol:
-                error = False
-            iteration += 1
-            print(f"Iteration {iteration}, Max Error: {maxError}")
+                self.xGrid[1, i] = self.xGrid[0, i] + vector_rot[0]
+                self.yGrid[1, i] = self.yGrid[0, i] + vector_rot[1]
 
-        if iteration == self.max_iter:
-            print("Warning: Maximum number of iterations reached without converging.\n")
+    def calculate_coefficients(self, i, j):
+        alpha = (
+            (self.xGrid[j + 1, i] - self.xGrid[j - 1, i]) ** 2
+            + (self.yGrid[j + 1, i] - self.yGrid[j - 1, i]) ** 2
+        ) / (4 * self.deltaEta**2)
+
+        beta = (
+            (self.xGrid[j, i + 1] - self.xGrid[j, i - 1])
+            * (self.xGrid[j + 1, i] - self.xGrid[j - 1, i])
+            + (self.yGrid[j, i + 1] - self.yGrid[j, i - 1])
+            * (self.yGrid[j + 1, i] - self.yGrid[j - 1, i])
+        ) / (4 * self.deltaXi * self.deltaEta)
+
+        gamma = (
+            (self.xGrid[j, i + 1] - self.xGrid[j, i - 1]) ** 2
+            + (self.yGrid[j, i + 1] - self.yGrid[j, i - 1]) ** 2
+        ) / (4 * self.deltaXi**2)
+
+        denom = 2 * gamma / (self.deltaEta**2) + 2 * alpha / (self.deltaXi**2)
+        a1 = (-beta / (2 * self.deltaEta * self.deltaXi)) / denom
+        a2 = (gamma / self.deltaEta**2) / denom
+        a3 = (beta / (2 * self.deltaEta * self.deltaXi)) / denom
+        a4 = (alpha / self.deltaXi**2) / denom
+        a5 = (alpha / self.deltaXi**2) / denom
+        a6 = (beta / (2 * self.deltaEta * self.deltaXi)) / denom
+        a7 = (gamma / self.deltaEta**2) / denom
+        a8 = (-beta / (2 * self.deltaEta * self.deltaXi)) / denom
+
+        return np.array([a1, a2, a3, a4, a5, a6, a7, a8])
+
+    def solve_grid(self):
+        xGridNew = self.xGrid.copy()
+        yGridNew = self.yGrid.copy()
+        omega = 1  # Relaxation factor
+
+        error_flag = True
+        iterations = 0
+
+        while error_flag and iterations < self.iter_lim:
+            iterations += 1
+            error_flag = False
+            max_error = 0
+
+            for j, i in product(range(1, self.jMax - 1), range(1, self.iMax - 1)):
+
+                coeffs = self.calculate_coefficients(i, j)
+
+                xAdjacent = np.array(
+                    [
+                        xGridNew[j - 1, i - 1],
+                        xGridNew[j - 1, i],
+                        xGridNew[j - 1, i + 1],
+                        xGridNew[j, i - 1],
+                        self.xGrid[j, i + 1],
+                        self.xGrid[j + 1, i - 1],
+                        self.xGrid[j + 1, i],
+                        self.xGrid[j + 1, i + 1],
+                    ]
+                )
+
+                yAdjacent = np.array(
+                    [
+                        yGridNew[j - 1, i - 1],
+                        yGridNew[j - 1, i],
+                        yGridNew[j - 1, i + 1],
+                        yGridNew[j, i - 1],
+                        self.yGrid[j, i + 1],
+                        self.yGrid[j + 1, i - 1],
+                        self.yGrid[j + 1, i],
+                        self.yGrid[j + 1, i + 1],
+                    ]
+                )
+
+                xNew = np.dot(coeffs, xAdjacent)
+                yNew = np.dot(coeffs, yAdjacent)
+
+                xGridNew[j, i] = omega * xNew + (1 - omega) * self.xGrid[j, i]
+                yGridNew[j, i] = omega * yNew + (1 - omega) * self.yGrid[j, i]
+
+                error = np.linalg.norm(
+                    np.array(
+                        [
+                            xGridNew[j, i] - self.xGrid[j, i],
+                            yGridNew[j, i] - self.yGrid[j, i],
+                        ]
+                    )
+                )
+
+                # Orthoganality for bottom
+
+                xBase = self.xGrid[0, i]
+                if j == 1 and 2 < xBase < 3:
+                    dy_dx = self.dy_dx_lower(xBase)
+                    normal = np.array([-dy_dx, 1]) / np.linalg.norm([-dy_dx, 1])
+                    step = self.deltaEta * (self.y_upper(xBase) - self.y_lower(xBase))
+                    xGridNew[1, i] = self.xGrid[0, i] + normal[0] * step
+                    yGridNew[1, i] = self.yGrid[0, i] + normal[1] * step
+
+                max_error = max(max_error, error)
+                if error > self.tol:
+                    error_flag = True
+
+            self.xGrid = xGridNew.copy()
+            self.yGrid = yGridNew.copy()
+
+            if iterations % 100 == 0:
+                print(f"Iteration {iterations}, Max Error: {max_error}")
 
     def plot_grid(self):
         plt.figure(figsize=(8, 6))
-        for j in range(self.numJNodes):
-            plt.plot(
-                self.xGrid[j, :],
-                self.yGrid[j, :],
-                color="black",
-                zorder=0,
-                linewidth=0.5,
-            )
-        for i in range(self.numINodes):
-            plt.plot(
-                self.xGrid[:, i],
-                self.yGrid[:, i],
-                color="black",
-                zorder=0,
-                linewidth=0.5,
-            )
-        plt.scatter(self.xGrid, self.yGrid, color="black", s=5, zorder=1)
+        for j in range(self.jMax):
+            plt.plot(self.xGrid[j, :], self.yGrid[j, :], "k-", zorder=0, lw=0.5)
+        for i in range(self.iMax):
+            plt.plot(self.xGrid[:, i], self.yGrid[:, i], "k-", zorder=0, lw=0.5)
+        # plt.scatter(self.xGrid, self.yGrid, color="black", s=5, zorder=1)
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title("Structured Grid using Laplace Equation")
@@ -134,10 +200,8 @@ class StructuredGrid:
 
 
 if __name__ == "__main__":
-    myGrid = StructuredGrid(
-        numINodes=50, numJNodes=10, xBounds=(0, 5), yBounds=(0, 1), tol=1e-6
-    )
-    myGrid.make_computational_grid()
-    myGrid.make_algebraic_grid()
-    myGrid.GaussSeidel()
+    myGrid = StructuredMesh(iMax=250, jMax=50, xBounds=(0, 5), yBounds=(0, 1))
+    myGrid.create_algebraic_grid()
+    myGrid.plot_grid()
+    myGrid.solve_grid()
     myGrid.plot_grid()
