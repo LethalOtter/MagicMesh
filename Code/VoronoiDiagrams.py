@@ -38,18 +38,15 @@ class TriangleMesh:
         v2 = self.get_or_make_vertex(n2)
         v3 = self.get_or_make_vertex(n3)
 
-        cross = 1 / 2 * (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x)  # Ensure CCW direction
+        cross = 1 / 2 * (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (
+            v3.x - v1.x
+        )  # Ensure CCW direction
 
         if cross > 0:
-            temp = v1
-            v1 = v2
-            v2 = temp
-            
-
+            v1, v2 = v2, v1
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
-
 
         v1.edge = e1
         v2.edge = e2
@@ -113,13 +110,11 @@ class TriangleMesh:
         key = (v1, v2)
         twin_key = (v2, v1)
         if key in self.edge_map:
-            return(self.edge_map(key))
-        else:
-            edge = HalfEdge(v1)
-            twin_edge = HalfEdge(v2)
-            self.edge_map[key] = edge
-            self.edge_map[twin_key] = edge
-
+            return self.edge_map(key)
+        edge = HalfEdge(v1)
+        twin_edge = HalfEdge(v2)
+        self.edge_map[key] = edge
+        self.edge_map[twin_key] = edge
 
     def link_twins(self, edge):
         v1 = edge.origin
